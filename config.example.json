@@ -1,0 +1,12 @@
+{
+  "access_token": "your_access_token_here",
+  "refresh_token": "your_refresh_token_here",
+  "expires_at": null,
+  "app_path": "/apps/your_app_name/",
+  "oauth": {
+    "client_id": "your_app_key_here",
+    "client_secret": "your_secret_key_here",
+    "redirect_uri": "http://localhost:8080/callback",
+    "scope": "basic,netdisk"
+  }
+}
