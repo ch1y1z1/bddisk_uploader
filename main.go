@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"icode.baidu.com/baidu/xpan/go-sdk/xpan/upload"
@@ -227,18 +229,22 @@ func uploadFile(config *Config, localFilePath, remoteFileName string) error {
 }
 
 func main() {
-	var localFilePath, remoteFileName, authCode, refreshToken string
-	var initConfig, auth, refresh bool
-	var authPort int
+	var localFilePath, localFolderPath, remoteFileName, authCode, refreshToken, excludePatterns string
+	var initConfig, auth, refresh, keepStructure bool
+	var authPort, maxConcurrent int
 
 	flag.StringVar(&localFilePath, "file", "", "要上传的本地文件路径")
+	flag.StringVar(&localFolderPath, "folder", "", "要上传的本地文件夹路径")
 	flag.StringVar(&remoteFileName, "name", "", "上传到网盘的文件名（可选，默认使用本地文件名）")
+	flag.StringVar(&excludePatterns, "exclude", "", "要排除的文件模式，用逗号分隔（如：*.tmp,*.log,.DS_Store）")
 	flag.StringVar(&authCode, "code", "", "授权码（用于获取access_token）")
 	flag.StringVar(&refreshToken, "refresh", "", "刷新token")
 	flag.BoolVar(&initConfig, "init", false, "初始化配置文件")
 	flag.BoolVar(&auth, "auth", false, "启动授权流程")
 	flag.BoolVar(&refresh, "refresh-token", false, "使用refresh_token刷新access_token")
+	flag.BoolVar(&keepStructure, "keep-structure", true, "保持文件夹结构（默认启用）")
 	flag.IntVar(&authPort, "port", 8080, "授权回调服务器端口")
+	flag.IntVar(&maxConcurrent, "concurrent", 3, "最大并发上传数（默认3）")
 	flag.Parse()
 
 	// 初始化配置文件
@@ -332,25 +338,55 @@ func main() {
 	}
 
 	// 检查参数
-	if localFilePath == "" {
+	if localFilePath == "" && localFolderPath == "" {
 		fmt.Println("使用方法:")
 		fmt.Println("  初始化配置: ./bddisk_uploader -init")
 		fmt.Println("  授权登录: ./bddisk_uploader -auth")
 		fmt.Println("  手动授权: ./bddisk_uploader -code <授权码>")
 		fmt.Println("  刷新token: ./bddisk_uploader -refresh-token")
 		fmt.Println("  上传文件: ./bddisk_uploader -file <本地文件路径> [-name <远程文件名>]")
+		fmt.Println("  上传文件夹: ./bddisk_uploader -folder <本地文件夹路径> [选项]")
+		fmt.Println("")
+		fmt.Println("文件夹上传选项:")
+		fmt.Println("  -exclude <模式>        排除文件模式，逗号分隔")
+		fmt.Println("  -keep-structure       保持文件夹结构（默认启用）")
+		fmt.Println("  -concurrent <数量>     最大并发上传数（默认3）")
 		os.Exit(1)
 	}
 
-	// 检查文件是否存在
-	if _, err := os.Stat(localFilePath); os.IsNotExist(err) {
-		fmt.Printf("文件不存在: %s\n", localFilePath)
+	// 检查互斥参数
+	if localFilePath != "" && localFolderPath != "" {
+		fmt.Println("错误: -file 和 -folder 参数不能同时使用")
 		os.Exit(1)
 	}
 
-	// 如果没有指定远程文件名，使用本地文件名
-	if remoteFileName == "" {
-		remoteFileName = filepath.Base(localFilePath)
+	// 检查文件或文件夹是否存在
+	var targetPath string
+	var isFolder bool
+	
+	if localFolderPath != "" {
+		targetPath = localFolderPath
+		isFolder = true
+		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+			fmt.Printf("文件夹不存在: %s\n", targetPath)
+			os.Exit(1)
+		}
+		// 检查是否为目录
+		if fileInfo, err := os.Stat(targetPath); err == nil && !fileInfo.IsDir() {
+			fmt.Printf("错误: %s 不是一个文件夹\n", targetPath)
+			os.Exit(1)
+		}
+	} else {
+		targetPath = localFilePath
+		isFolder = false
+		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+			fmt.Printf("文件不存在: %s\n", targetPath)
+			os.Exit(1)
+		}
+		// 如果没有指定远程文件名，使用本地文件名
+		if remoteFileName == "" {
+			remoteFileName = filepath.Base(targetPath)
+		}
 	}
 
 	// 加载配置
@@ -383,14 +419,25 @@ func main() {
 		}
 	}
 
-	// 上传文件
-	fmt.Printf("开始上传文件: %s -> %s\n", localFilePath, remoteFileName)
-	if err := uploadFile(config, localFilePath, remoteFileName); err != nil {
-		fmt.Printf("上传失败: %v\n", err)
-		os.Exit(1)
+	// 上传文件或文件夹
+	if isFolder {
+		// 上传文件夹
+		excludeList := parseExcludePatterns(excludePatterns)
+		fmt.Printf("开始上传文件夹: %s\n", targetPath)
+		if err := uploadFolder(config, targetPath, excludeList, keepStructure, maxConcurrent); err != nil {
+			fmt.Printf("上传失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("文件夹上传完成！")
+	} else {
+		// 上传单个文件
+		fmt.Printf("开始上传文件: %s -> %s\n", targetPath, remoteFileName)
+		if err := uploadFile(config, targetPath, remoteFileName); err != nil {
+			fmt.Printf("上传失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("上传成功！")
 	}
-
-	fmt.Println("上传成功！")
 }
 
 // 加载配置用于授权（不要求access_token存在）
@@ -451,4 +498,265 @@ func saveTokenToConfig(tokenResp *TokenResponse) error {
 	}
 
 	return os.WriteFile(ConfigFile, configData, 0644)
+}
+
+// 文件信息结构
+type FileInfo struct {
+	LocalPath  string
+	RemotePath string
+	Size       int64
+	ModTime    time.Time
+}
+
+// 上传结果统计
+type UploadStats struct {
+	TotalFiles    int64
+	UploadedFiles int64
+	FailedFiles   int64
+	TotalSize     int64
+	UploadedSize  int64
+	StartTime     time.Time
+}
+
+// 解析排除模式
+func parseExcludePatterns(patterns string) []string {
+	if patterns == "" {
+		return []string{}
+	}
+	
+	parts := strings.Split(patterns, ",")
+	var result []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+// 检查文件是否应该被排除
+func shouldExcludeFile(filePath string, excludePatterns []string) bool {
+	fileName := filepath.Base(filePath)
+	
+	// 默认排除的文件
+	defaultExcludes := []string{
+		".DS_Store",
+		"Thumbs.db",
+		".git",
+		".svn",
+		".hg",
+		"node_modules",
+		"*.tmp",
+		"*.temp",
+		"*~",
+	}
+	
+	allPatterns := append(excludePatterns, defaultExcludes...)
+	
+	for _, pattern := range allPatterns {
+		if matched, _ := filepath.Match(pattern, fileName); matched {
+			return true
+		}
+		// 也检查完整路径
+		if matched, _ := filepath.Match(pattern, filePath); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// 收集文件夹中的所有文件
+func collectFiles(folderPath string, excludePatterns []string, keepStructure bool) ([]FileInfo, error) {
+	var files []FileInfo
+	
+	// 获取文件夹名称，用于保持完整的目录结构
+	folderName := filepath.Base(folderPath)
+	
+	err := filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			fmt.Printf("警告: 访问文件失败 %s: %v\n", path, err)
+			return nil // 继续处理其他文件
+		}
+		
+		// 跳过目录
+		if info.IsDir() {
+			return nil
+		}
+		
+		// 检查是否应该排除
+		if shouldExcludeFile(path, excludePatterns) {
+			fmt.Printf("跳过文件: %s\n", path)
+			return nil
+		}
+		
+		// 计算远程路径
+		var remotePath string
+		if keepStructure {
+			// 保持目录结构，包含最外层文件夹名
+			relPath, err := filepath.Rel(folderPath, path)
+			if err != nil {
+				return fmt.Errorf("计算相对路径失败: %v", err)
+			}
+			// 将文件夹名称作为根目录
+			remotePath = filepath.Join(folderName, relPath)
+			remotePath = strings.ReplaceAll(remotePath, "\\", "/")
+		} else {
+			// 平铺所有文件到文件夹根目录
+			remotePath = filepath.Join(folderName, info.Name())
+			remotePath = strings.ReplaceAll(remotePath, "\\", "/")
+		}
+		
+		files = append(files, FileInfo{
+			LocalPath:  path,
+			RemotePath: remotePath,
+			Size:       info.Size(),
+			ModTime:    info.ModTime(),
+		})
+		
+		return nil
+	})
+	
+	return files, err
+}
+
+// 上传单个文件（用于并发上传）
+func uploadSingleFile(config *Config, fileInfo FileInfo, stats *UploadStats, wg *sync.WaitGroup, semaphore chan struct{}) {
+	defer wg.Done()
+	defer func() { <-semaphore }() // 释放信号量
+	
+	fmt.Printf("[%d/%d] 上传: %s\n", 
+		atomic.LoadInt64(&stats.UploadedFiles)+atomic.LoadInt64(&stats.FailedFiles)+1, 
+		stats.TotalFiles, 
+		fileInfo.RemotePath)
+	
+	err := uploadFile(config, fileInfo.LocalPath, fileInfo.RemotePath)
+	if err != nil {
+		atomic.AddInt64(&stats.FailedFiles, 1)
+		fmt.Printf("❌ 上传失败: %s - %v\n", fileInfo.RemotePath, err)
+	} else {
+		atomic.AddInt64(&stats.UploadedFiles, 1)
+		atomic.AddInt64(&stats.UploadedSize, fileInfo.Size)
+		fmt.Printf("✅ 上传成功: %s\n", fileInfo.RemotePath)
+	}
+}
+
+// 格式化文件大小
+func formatFileSize(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
+}
+
+// 格式化持续时间
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	} else if d < time.Hour {
+		return fmt.Sprintf("%.1fm", d.Minutes())
+	} else {
+		return fmt.Sprintf("%.1fh", d.Hours())
+	}
+}
+
+// 上传文件夹
+func uploadFolder(config *Config, folderPath string, excludePatterns []string, keepStructure bool, maxConcurrent int) error {
+	// 收集所有需要上传的文件
+	fmt.Println("正在扫描文件...")
+	files, err := collectFiles(folderPath, excludePatterns, keepStructure)
+	if err != nil {
+		return fmt.Errorf("收集文件失败: %v", err)
+	}
+	
+	if len(files) == 0 {
+		fmt.Println("没有找到需要上传的文件")
+		return nil
+	}
+	
+	// 计算总大小
+	var totalSize int64
+	for _, file := range files {
+		totalSize += file.Size
+	}
+	
+	// 初始化统计信息
+	stats := &UploadStats{
+		TotalFiles: int64(len(files)),
+		TotalSize:  totalSize,
+		StartTime:  time.Now(),
+	}
+	
+	fmt.Printf("发现 %d 个文件，总大小: %s\n", len(files), formatFileSize(totalSize))
+	fmt.Printf("开始并发上传 (最大并发数: %d)...\n\n", maxConcurrent)
+	
+	// 创建信号量控制并发数
+	semaphore := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	
+	// 启动进度监控
+	done := make(chan bool)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		
+		for {
+			select {
+			case <-ticker.C:
+				uploaded := atomic.LoadInt64(&stats.UploadedFiles)
+				failed := atomic.LoadInt64(&stats.FailedFiles)
+				uploadedSize := atomic.LoadInt64(&stats.UploadedSize)
+				
+				progress := float64(uploaded+failed) / float64(stats.TotalFiles) * 100
+				elapsed := time.Since(stats.StartTime)
+				
+				fmt.Printf("\n📊 进度报告: %.1f%% (%d/%d) | 成功: %d | 失败: %d | 已传输: %s/%s | 耗时: %s\n\n",
+					progress, uploaded+failed, stats.TotalFiles, uploaded, failed,
+					formatFileSize(uploadedSize), formatFileSize(totalSize), formatDuration(elapsed))
+			case <-done:
+				return
+			}
+		}
+	}()
+	
+	// 并发上传文件
+	for _, file := range files {
+		semaphore <- struct{}{} // 获取信号量
+		wg.Add(1)
+		go uploadSingleFile(config, file, stats, &wg, semaphore)
+	}
+	
+	// 等待所有上传完成
+	wg.Wait()
+	done <- true
+	
+	// 显示最终统计
+	elapsed := time.Since(stats.StartTime)
+	uploaded := atomic.LoadInt64(&stats.UploadedFiles)
+	failed := atomic.LoadInt64(&stats.FailedFiles)
+	uploadedSize := atomic.LoadInt64(&stats.UploadedSize)
+	
+	fmt.Printf("\n🎉 上传完成!\n")
+	fmt.Printf("总文件数: %d\n", stats.TotalFiles)
+	fmt.Printf("成功上传: %d\n", uploaded)
+	fmt.Printf("失败文件: %d\n", failed)
+	fmt.Printf("传输大小: %s / %s\n", formatFileSize(uploadedSize), formatFileSize(totalSize))
+	fmt.Printf("总耗时: %s\n", formatDuration(elapsed))
+	
+	if uploaded > 0 {
+		avgSpeed := float64(uploadedSize) / elapsed.Seconds()
+		fmt.Printf("平均速度: %s/s\n", formatFileSize(int64(avgSpeed)))
+	}
+	
+	if failed > 0 {
+		return fmt.Errorf("有 %d 个文件上传失败", failed)
+	}
+	
+	return nil
 }
