@@ -3,11 +3,11 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'  # 当推送 v1.0.0, v1.2.3 等版本标签时触发
-  workflow_dispatch:  # 允许手动触发
+      - "v*" # 当推送 v1.0.0, v1.2.3 等版本标签时触发
+  workflow_dispatch: # 允许手动触发
 
 env:
-  GO_VERSION: '1.19'
+  GO_VERSION: "1.19"
 
 jobs:
   build:
@@ -25,7 +25,7 @@ jobs:
             goarch: arm64
             suffix: .exe
             name: windows-arm64
-          
+
           # macOS
           - goos: darwin
             goarch: amd64
@@ -35,7 +35,7 @@ jobs:
             goarch: arm64
             suffix: ""
             name: macos-arm64
-          
+
           # Linux
           - goos: linux
             goarch: amd64
@@ -51,167 +51,146 @@ jobs:
             name: linux-arm
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ env.GO_VERSION }}
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
 
-    - name: Get version from tag
-      id: version
-      run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/}
-        else
-          VERSION="dev-$(git rev-parse --short HEAD)"
-        fi
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building version: $VERSION"
+      - name: Get version from tag
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
 
-    - name: Build binary
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: 0
-      run: |
-        # 设置构建变量
-        BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC')
-        GIT_COMMIT=$(git rev-parse --short HEAD)
-        VERSION=${{ steps.version.outputs.VERSION }}
-        
-        # 设置LDFLAGS
-        LDFLAGS="-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
-        
-        # 构建二进制文件
-        BINARY_NAME="bddisk_uploader${{ matrix.suffix }}"
-        echo "Building $BINARY_NAME for $GOOS/$GOARCH"
-        go build -ldflags "$LDFLAGS" -o "$BINARY_NAME"
-        
-        # 验证构建结果
-        ls -la "$BINARY_NAME"
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          # 设置构建变量
+          BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC')
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          VERSION=${{ steps.version.outputs.VERSION }}
 
-    - name: Rename binary for release
-      run: |
-        BINARY_NAME="bddisk_uploader${{ matrix.suffix }}"
-        RELEASE_NAME="bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}${{ matrix.suffix }}"
-        
-        # 重命名二进制文件
-        mv "$BINARY_NAME" "$RELEASE_NAME"
-        
-        # 输出文件信息用于后续步骤
-        echo "RELEASE_FILE=$RELEASE_NAME" >> $GITHUB_ENV
-        
-        # 显示文件信息
-        ls -la "$RELEASE_NAME"
+          # 设置LDFLAGS
+          LDFLAGS="-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}
-        path: ${{ env.RELEASE_FILE }}
-        retention-days: 7
+          # 构建二进制文件
+          BINARY_NAME="bddisk_uploader${{ matrix.suffix }}"
+          echo "Building $BINARY_NAME for $GOOS/$GOARCH"
+          go build -ldflags "$LDFLAGS" -o "$BINARY_NAME"
+
+          # 验证构建结果
+          ls -la "$BINARY_NAME"
+
+      - name: Rename binary for release
+        run: |
+          BINARY_NAME="bddisk_uploader${{ matrix.suffix }}"
+          RELEASE_NAME="bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}${{ matrix.suffix }}"
+
+          # 重命名二进制文件
+          mv "$BINARY_NAME" "$RELEASE_NAME"
+
+          # 输出文件信息用于后续步骤
+          echo "RELEASE_FILE=$RELEASE_NAME" >> $GITHUB_ENV
+
+          # 显示文件信息
+          ls -la "$RELEASE_NAME"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}
+          path: ${{ env.RELEASE_FILE }}
+          retention-days: 7
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Get version from tag
-      id: version
-      run: |
-        VERSION=${GITHUB_REF#refs/tags/}
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Release version: $VERSION"
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
 
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-    - name: Prepare release assets
-      run: |
-        mkdir -p release-assets
-        find artifacts -type f \( -name "bddisk_uploader*" \) | while read file; do
-          cp "$file" release-assets/
-        done
-        ls -la release-assets/
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "bddisk_uploader*" \) | while read file; do
+            cp "$file" release-assets/
+          done
+          ls -la release-assets/
 
-    - name: Generate release notes
-      id: release_notes
-      run: |
-        VERSION=${{ steps.version.outputs.VERSION }}
-        
-        # 提取 CHANGELOG.md 中对应版本的内容
-        if grep -q "## \[${VERSION#v}\]" CHANGELOG.md; then
-          NOTES=$(awk "/## \[${VERSION#v}\]/,/## \[/{if(/## \[${VERSION#v}\]/)p=1;else if(/## \[/ && p)exit;if(p && !/## \[${VERSION#v}\]/)print}" CHANGELOG.md)
-        else
-          NOTES="## 版本 $VERSION
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
 
-感谢使用百度网盘文件上传工具！
+          # 提取 CHANGELOG.md 中对应版本的内容
+          if grep -q "## \[${VERSION#v}\]" CHANGELOG.md; then
+            awk "/## \[${VERSION#v}\]/,/## \[/{if(/## \[${VERSION#v}\]/)p=1;else if(/## \[/ && p)exit;if(p && !/## \[${VERSION#v}\]/)print}" CHANGELOG.md > release_notes.md
+          else
+            cat > release_notes.md << 'EOF'
+          百度网盘文件上传工具
 
-### 主要功能
-- 🚀 大文件分片上传支持
-- 📁 完整文件夹上传功能  
-- 🔐 OAuth2.0 安全授权
-- ⚡ 多文件并发上传
-- 📊 实时进度显示
-- 🎯 智能文件过滤
+          支持大文件分片上传、完整文件夹上传、OAuth2.0授权等功能。
 
-### 下载说明
-请根据你的操作系统下载对应的版本：
-- **Windows**: \`bddisk_uploader-${VERSION}-windows-amd64.exe\`
-- **macOS**: \`bddisk_uploader-${VERSION}-macos-amd64\` (Intel) 或 \`bddisk_uploader-${VERSION}-macos-arm64\` (Apple Silicon)
-- **Linux**: \`bddisk_uploader-${VERSION}-linux-amd64\`
+          下载对应平台的二进制文件，添加执行权限后即可使用：
+          ```bash
+          chmod +x bddisk_uploader-*  # Linux/macOS
+          ./bddisk_uploader-* -init   # 初始化配置
+          ./bddisk_uploader-* -auth   # 进行授权
+          ./bddisk_uploader-* -file /path/to/file    # 上传文件
+          ./bddisk_uploader-* -folder /path/to/folder # 上传文件夹
+          ```
+          EOF
+                  fi
 
-### 快速开始
-\`\`\`bash
-# 下载后添加执行权限 (Linux/macOS)
-chmod +x bddisk_uploader-${VERSION}-*
+                  echo "Generated release notes:"
+                  cat release_notes.md
 
-# 初始化配置
-./bddisk_uploader-${VERSION}-* -init
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: 百度网盘上传工具 ${{ steps.version.outputs.VERSION }}
+          body_path: release_notes.md
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# 配置你的应用信息后进行授权
-./bddisk_uploader-${VERSION}-* -auth
-
-# 上传文件或文件夹
-./bddisk_uploader-${VERSION}-* -file /path/to/file
-./bddisk_uploader-${VERSION}-* -folder /path/to/folder
-\`\`\`"
-        fi
-        
-        # 将发布说明保存到文件
-        echo "$NOTES" > release_notes.md
-        echo "Generated release notes:"
-        cat release_notes.md
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ steps.version.outputs.VERSION }}
-        name: 百度网盘上传工具 ${{ steps.version.outputs.VERSION }}
-        body_path: release_notes.md
-        files: release-assets/*
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload release assets info
-      run: |
-        echo "✅ Release created successfully!"
-        echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}"
-        echo ""
-        echo "📦 Release assets:"
-        ls -la release-assets/
-        echo ""
-        echo "📊 File sizes:"
-        du -h release-assets/*
+      - name: Upload release assets info
+        run: |
+          echo "✅ Release created successfully!"
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}"
+          echo ""
+          echo "📦 Release assets:"
+          ls -la release-assets/
+          echo ""
+          echo "📊 File sizes:"
+          du -h release-assets/*
