@@ -92,39 +92,25 @@ jobs:
         # 验证构建结果
         ls -la "$BINARY_NAME"
 
-    - name: Create release archive
+    - name: Rename binary for release
       run: |
         BINARY_NAME="bddisk_uploader${{ matrix.suffix }}"
-        ARCHIVE_NAME="bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}"
+        RELEASE_NAME="bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}${{ matrix.suffix }}"
         
-        # 创建发布目录
-        mkdir -p release
-        cp "$BINARY_NAME" release/
-        cp README.md release/
-        cp LICENSE release/
-        cp CHANGELOG.md release/
-        cp config.example.json release/
-        
-        # 根据平台创建不同的压缩包
-        if [[ "${{ matrix.goos }}" == "windows" ]]; then
-          cd release && zip -r "../${ARCHIVE_NAME}.zip" .
-        else
-          tar -czf "${ARCHIVE_NAME}.tar.gz" -C release .
-        fi
+        # 重命名二进制文件
+        mv "$BINARY_NAME" "$RELEASE_NAME"
         
         # 输出文件信息用于后续步骤
-        echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
-        if [[ "${{ matrix.goos }}" == "windows" ]]; then
-          echo "ARCHIVE_FILE=${ARCHIVE_NAME}.zip" >> $GITHUB_ENV
-        else
-          echo "ARCHIVE_FILE=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
-        fi
+        echo "RELEASE_FILE=$RELEASE_NAME" >> $GITHUB_ENV
+        
+        # 显示文件信息
+        ls -la "$RELEASE_NAME"
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.ARCHIVE_NAME }}
-        path: ${{ env.ARCHIVE_FILE }}
+        name: bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}
+        path: ${{ env.RELEASE_FILE }}
         retention-days: 7
 
   release:
@@ -152,7 +138,7 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release-assets
-        find artifacts -name "*.zip" -o -name "*.tar.gz" | while read file; do
+        find artifacts -type f \( -name "bddisk_uploader*" \) | while read file; do
           cp "$file" release-assets/
         done
         ls -la release-assets/
@@ -180,21 +166,24 @@ jobs:
 
 ### 下载说明
 请根据你的操作系统下载对应的版本：
-- **Windows**: \`bddisk_uploader-${VERSION}-windows-amd64.zip\`
-- **macOS**: \`bddisk_uploader-${VERSION}-macos-amd64.tar.gz\` (Intel) 或 \`bddisk_uploader-${VERSION}-macos-arm64.tar.gz\` (Apple Silicon)
-- **Linux**: \`bddisk_uploader-${VERSION}-linux-amd64.tar.gz\`
+- **Windows**: \`bddisk_uploader-${VERSION}-windows-amd64.exe\`
+- **macOS**: \`bddisk_uploader-${VERSION}-macos-amd64\` (Intel) 或 \`bddisk_uploader-${VERSION}-macos-arm64\` (Apple Silicon)
+- **Linux**: \`bddisk_uploader-${VERSION}-linux-amd64\`
 
 ### 快速开始
 \`\`\`bash
-# 解压后初始化配置
-./bddisk_uploader -init
+# 下载后添加执行权限 (Linux/macOS)
+chmod +x bddisk_uploader-${VERSION}-*
+
+# 初始化配置
+./bddisk_uploader-${VERSION}-* -init
 
 # 配置你的应用信息后进行授权
-./bddisk_uploader -auth
+./bddisk_uploader-${VERSION}-* -auth
 
 # 上传文件或文件夹
-./bddisk_uploader -file /path/to/file
-./bddisk_uploader -folder /path/to/folder
+./bddisk_uploader-${VERSION}-* -file /path/to/file
+./bddisk_uploader-${VERSION}-* -folder /path/to/folder
 \`\`\`"
         fi
         
