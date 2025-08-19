@@ -119,6 +119,11 @@ func createFileChunks(filePath string) ([]string, error) {
 	buffer := make([]byte, ChunkSize)
 	chunkIndex := 0
 
+	// 获取原文件的基本名称（不包含路径）
+	baseFileName := filepath.Base(filePath)
+	// 获取系统临时目录
+	tempDir := os.TempDir()
+
 	for {
 		n, err := file.Read(buffer)
 		if err != nil && err != io.EOF {
@@ -128,7 +133,8 @@ func createFileChunks(filePath string) ([]string, error) {
 			break
 		}
 
-		chunkFileName := fmt.Sprintf("%s.chunk.%d", filePath, chunkIndex)
+		// 在临时目录下创建分片文件，使用原文件名和进程ID确保唯一性
+		chunkFileName := filepath.Join(tempDir, fmt.Sprintf("%s.%d.chunk.%d", baseFileName, os.Getpid(), chunkIndex))
 		chunkFile, err := os.Create(chunkFileName)
 		if err != nil {
 			return nil, err
