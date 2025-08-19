@@ -1,0 +1,19 @@
+# GitHub Sponsors 配置文件
+
+# 如果你有 GitHub Sponsors 账号，取消注释下面一行
+# github: [your-github-username]
+
+# 支持的其他平台
+# patreon: your-patreon-username
+# open_collective: your-open-collective-name
+# ko_fi: your-ko-fi-username
+# tidelift: npm/package-name
+# community_bridge: project-name
+# liberapay: your-liberapay-username
+# issuehunt: your-issuehunt-username
+# otechie: your-otechie-username
+# lfx_crowdfunding: your-crowdfunding-project-name
+
+# 自定义链接（最多 4 个）
+custom: 
+  - "https://github.com/sponsors"  # 可以替换为你的捐赠链接

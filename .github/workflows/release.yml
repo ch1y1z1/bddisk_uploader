@@ -1,0 +1,228 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # 当推送 v1.0.0, v1.2.3 等版本标签时触发
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  GO_VERSION: '1.19'
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # Windows
+          - goos: windows
+            goarch: amd64
+            suffix: .exe
+            name: windows-amd64
+          - goos: windows
+            goarch: arm64
+            suffix: .exe
+            name: windows-arm64
+          
+          # macOS
+          - goos: darwin
+            goarch: amd64
+            suffix: ""
+            name: macos-amd64
+          - goos: darwin
+            goarch: arm64
+            suffix: ""
+            name: macos-arm64
+          
+          # Linux
+          - goos: linux
+            goarch: amd64
+            suffix: ""
+            name: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: ""
+            name: linux-arm64
+          - goos: linux
+            goarch: arm
+            suffix: ""
+            name: linux-arm
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Get version from tag
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+        else
+          VERSION="dev-$(git rev-parse --short HEAD)"
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building version: $VERSION"
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
+      run: |
+        # 设置构建变量
+        BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC')
+        GIT_COMMIT=$(git rev-parse --short HEAD)
+        VERSION=${{ steps.version.outputs.VERSION }}
+        
+        # 设置LDFLAGS
+        LDFLAGS="-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
+        
+        # 构建二进制文件
+        BINARY_NAME="bddisk_uploader${{ matrix.suffix }}"
+        echo "Building $BINARY_NAME for $GOOS/$GOARCH"
+        go build -ldflags "$LDFLAGS" -o "$BINARY_NAME"
+        
+        # 验证构建结果
+        ls -la "$BINARY_NAME"
+
+    - name: Create release archive
+      run: |
+        BINARY_NAME="bddisk_uploader${{ matrix.suffix }}"
+        ARCHIVE_NAME="bddisk_uploader-${{ steps.version.outputs.VERSION }}-${{ matrix.name }}"
+        
+        # 创建发布目录
+        mkdir -p release
+        cp "$BINARY_NAME" release/
+        cp README.md release/
+        cp LICENSE release/
+        cp CHANGELOG.md release/
+        cp config.example.json release/
+        
+        # 根据平台创建不同的压缩包
+        if [[ "${{ matrix.goos }}" == "windows" ]]; then
+          cd release && zip -r "../${ARCHIVE_NAME}.zip" .
+        else
+          tar -czf "${ARCHIVE_NAME}.tar.gz" -C release .
+        fi
+        
+        # 输出文件信息用于后续步骤
+        echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
+        if [[ "${{ matrix.goos }}" == "windows" ]]; then
+          echo "ARCHIVE_FILE=${ARCHIVE_NAME}.zip" >> $GITHUB_ENV
+        else
+          echo "ARCHIVE_FILE=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARCHIVE_NAME }}
+        path: ${{ env.ARCHIVE_FILE }}
+        retention-days: 7
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get version from tag
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Release version: $VERSION"
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        find artifacts -name "*.zip" -o -name "*.tar.gz" | while read file; do
+          cp "$file" release-assets/
+        done
+        ls -la release-assets/
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        VERSION=${{ steps.version.outputs.VERSION }}
+        
+        # 提取 CHANGELOG.md 中对应版本的内容
+        if grep -q "## \[${VERSION#v}\]" CHANGELOG.md; then
+          NOTES=$(awk "/## \[${VERSION#v}\]/,/## \[/{if(/## \[${VERSION#v}\]/)p=1;else if(/## \[/ && p)exit;if(p && !/## \[${VERSION#v}\]/)print}" CHANGELOG.md)
+        else
+          NOTES="## 版本 $VERSION
+
+感谢使用百度网盘文件上传工具！
+
+### 主要功能
+- 🚀 大文件分片上传支持
+- 📁 完整文件夹上传功能  
+- 🔐 OAuth2.0 安全授权
+- ⚡ 多文件并发上传
+- 📊 实时进度显示
+- 🎯 智能文件过滤
+
+### 下载说明
+请根据你的操作系统下载对应的版本：
+- **Windows**: \`bddisk_uploader-${VERSION}-windows-amd64.zip\`
+- **macOS**: \`bddisk_uploader-${VERSION}-macos-amd64.tar.gz\` (Intel) 或 \`bddisk_uploader-${VERSION}-macos-arm64.tar.gz\` (Apple Silicon)
+- **Linux**: \`bddisk_uploader-${VERSION}-linux-amd64.tar.gz\`
+
+### 快速开始
+\`\`\`bash
+# 解压后初始化配置
+./bddisk_uploader -init
+
+# 配置你的应用信息后进行授权
+./bddisk_uploader -auth
+
+# 上传文件或文件夹
+./bddisk_uploader -file /path/to/file
+./bddisk_uploader -folder /path/to/folder
+\`\`\`"
+        fi
+        
+        # 将发布说明保存到文件
+        echo "$NOTES" > release_notes.md
+        echo "Generated release notes:"
+        cat release_notes.md
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.VERSION }}
+        name: 百度网盘上传工具 ${{ steps.version.outputs.VERSION }}
+        body_path: release_notes.md
+        files: release-assets/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload release assets info
+      run: |
+        echo "✅ Release created successfully!"
+        echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}"
+        echo ""
+        echo "📦 Release assets:"
+        ls -la release-assets/
+        echo ""
+        echo "📊 File sizes:"
+        du -h release-assets/*
