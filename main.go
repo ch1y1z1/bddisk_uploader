@@ -23,6 +23,7 @@ const (
 	ConfigFile = "config.json"
 	MaxRetries = 3              // 最大重试次数
 	BaseRetryDelay = 1 * time.Second // 基础重试延迟
+	DefaultCacheDir = ".chunks"        // 默认缓存目录
 )
 
 type Config struct {
@@ -110,8 +111,32 @@ func calculateFileMD5Chunks(filePath string) ([]string, uint64, error) {
 	return md5List, fileSize, nil
 }
 
+// 获取缓存目录，如果不存在则创建
+func getCacheDir(customCacheDir string) (string, error) {
+	var cacheDir string
+	
+	if customCacheDir != "" {
+		// 使用用户指定的缓存目录
+		cacheDir = customCacheDir
+	} else {
+		// 使用当前目录下的 .chunks 目录作为默认缓存目录
+		currentDir, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("获取当前目录失败: %v", err)
+		}
+		cacheDir = filepath.Join(currentDir, DefaultCacheDir)
+	}
+	
+	// 确保缓存目录存在
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", fmt.Errorf("创建缓存目录失败: %v", err)
+	}
+	
+	return cacheDir, nil
+}
+
 // 创建文件分片
-func createFileChunks(filePath string) ([]string, error) {
+func createFileChunks(filePath, cacheDir string) ([]string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -124,8 +149,6 @@ func createFileChunks(filePath string) ([]string, error) {
 
 	// 获取原文件的基本名称（不包含路径）
 	baseFileName := filepath.Base(filePath)
-	// 获取系统临时目录
-	tempDir := os.TempDir()
 
 	for {
 		n, err := file.Read(buffer)
@@ -136,8 +159,8 @@ func createFileChunks(filePath string) ([]string, error) {
 			break
 		}
 
-		// 在临时目录下创建分片文件，使用原文件名和进程ID确保唯一性
-		chunkFileName := filepath.Join(tempDir, fmt.Sprintf("%s.%d.chunk.%d", baseFileName, os.Getpid(), chunkIndex))
+		// 在缓存目录下创建分片文件，使用原文件名和进程ID确保唯一性
+		chunkFileName := filepath.Join(cacheDir, fmt.Sprintf("%s.%d.chunk.%d", baseFileName, os.Getpid(), chunkIndex))
 		chunkFile, err := os.Create(chunkFileName)
 		if err != nil {
 			return nil, err
@@ -158,9 +181,21 @@ func createFileChunks(filePath string) ([]string, error) {
 
 // 清理临时分片文件
 func cleanupChunks(chunkFiles []string) {
-	for _, chunkFile := range chunkFiles {
-		os.Remove(chunkFile)
+	if len(chunkFiles) == 0 {
+		return
 	}
+	
+	fmt.Printf("正在清理 %d 个分片文件...", len(chunkFiles))
+	cleanedCount := 0
+	for _, chunkFile := range chunkFiles {
+		if err := os.Remove(chunkFile); err != nil {
+			// 只在调试模式下显示清理失败的详细信息
+			// 不影响主要流程，因为这些是临时文件
+			continue
+		}
+		cleanedCount++
+	}
+	fmt.Printf("完成，已清理 %d 个分片文件\n", cleanedCount)
 }
 
 // 判断是否为可重试的错误
@@ -234,7 +269,7 @@ func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partS
 }
 
 // 上传文件到百度网盘
-func uploadFile(config *Config, localFilePath, remoteFileName string) error {
+func uploadFileWithCacheDir(config *Config, localFilePath, remoteFileName, cacheDir string) error {
 	// 计算文件MD5分片
 	fmt.Printf("正在计算文件MD5分片...")
 	md5List, fileSize, err := calculateFileMD5Chunks(localFilePath)
@@ -263,7 +298,7 @@ func uploadFile(config *Config, localFilePath, remoteFileName string) error {
 
 	// 创建临时分片文件
 	fmt.Printf("正在创建文件分片...")
-	chunkFiles, err := createFileChunks(localFilePath)
+	chunkFiles, err := createFileChunks(localFilePath, cacheDir)
 	if err != nil {
 		return fmt.Errorf("创建文件分片失败: %v", err)
 	}
@@ -308,7 +343,7 @@ func uploadFile(config *Config, localFilePath, remoteFileName string) error {
 }
 
 func main() {
-	var localFilePath, localFolderPath, remoteFileName, authCode, refreshToken, excludePatterns string
+	var localFilePath, localFolderPath, remoteFileName, authCode, refreshToken, excludePatterns, cacheDir string
 	var initConfig, auth, refresh, keepStructure bool
 	var authPort, maxConcurrent int
 
@@ -316,6 +351,7 @@ func main() {
 	flag.StringVar(&localFolderPath, "folder", "", "要上传的本地文件夹路径")
 	flag.StringVar(&remoteFileName, "name", "", "上传到网盘的文件名（可选，默认使用本地文件名）")
 	flag.StringVar(&excludePatterns, "exclude", "", "要排除的文件模式，用逗号分隔（如：*.tmp,*.log,.DS_Store）")
+	flag.StringVar(&cacheDir, "cache-dir", "", "指定分片缓存目录（可选，默认使用当前目录下的.chunks）")
 	flag.StringVar(&authCode, "code", "", "授权码（用于获取access_token）")
 	flag.StringVar(&refreshToken, "refresh", "", "刷新token")
 	flag.BoolVar(&initConfig, "init", false, "初始化配置文件")
@@ -430,6 +466,7 @@ func main() {
 		fmt.Println("  -exclude <模式>        排除文件模式，逗号分隔")
 		fmt.Println("  -keep-structure       保持文件夹结构（默认启用）")
 		fmt.Println("  -concurrent <数量>     最大并发上传数（默认3）")
+		fmt.Println("  -cache-dir <路径>      指定分片缓存目录（默认使用当前目录下的.chunks）")
 		os.Exit(1)
 	}
 
@@ -498,12 +535,20 @@ func main() {
 		}
 	}
 
+	// 获取缓存目录
+	actualCacheDir, err := getCacheDir(cacheDir)
+	if err != nil {
+		fmt.Printf("获取缓存目录失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("使用缓存目录: %s\n", actualCacheDir)
+
 	// 上传文件或文件夹
 	if isFolder {
 		// 上传文件夹
 		excludeList := parseExcludePatterns(excludePatterns)
 		fmt.Printf("开始上传文件夹: %s\n", targetPath)
-		if err := uploadFolder(config, targetPath, excludeList, keepStructure, maxConcurrent); err != nil {
+		if err := uploadFolderWithCacheDir(config, targetPath, excludeList, keepStructure, maxConcurrent, actualCacheDir); err != nil {
 			fmt.Printf("上传失败: %v\n", err)
 			os.Exit(1)
 		}
@@ -511,7 +556,7 @@ func main() {
 	} else {
 		// 上传单个文件
 		fmt.Printf("开始上传文件: %s -> %s\n", targetPath, remoteFileName)
-		if err := uploadFile(config, targetPath, remoteFileName); err != nil {
+		if err := uploadFileWithCacheDir(config, targetPath, remoteFileName, actualCacheDir); err != nil {
 			fmt.Printf("上传失败: %v\n", err)
 			os.Exit(1)
 		}
@@ -699,8 +744,8 @@ func collectFiles(folderPath string, excludePatterns []string, keepStructure boo
 	return files, err
 }
 
-// 上传单个文件（用于并发上传）
-func uploadSingleFile(config *Config, fileInfo FileInfo, stats *UploadStats, wg *sync.WaitGroup, semaphore chan struct{}) {
+// 上传单个文件（用于并发上传）- 支持缓存目录
+func uploadSingleFileWithCacheDir(config *Config, fileInfo FileInfo, stats *UploadStats, wg *sync.WaitGroup, semaphore chan struct{}, cacheDir string) {
 	defer wg.Done()
 	defer func() { <-semaphore }() // 释放信号量
 	
@@ -709,7 +754,7 @@ func uploadSingleFile(config *Config, fileInfo FileInfo, stats *UploadStats, wg 
 		stats.TotalFiles, 
 		fileInfo.RemotePath)
 	
-	err := uploadFile(config, fileInfo.LocalPath, fileInfo.RemotePath)
+	err := uploadFileWithCacheDir(config, fileInfo.LocalPath, fileInfo.RemotePath, cacheDir)
 	if err != nil {
 		atomic.AddInt64(&stats.FailedFiles, 1)
 		fmt.Printf("❌ 上传失败: %s - %v\n", fileInfo.RemotePath, err)
@@ -745,8 +790,8 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-// 上传文件夹
-func uploadFolder(config *Config, folderPath string, excludePatterns []string, keepStructure bool, maxConcurrent int) error {
+// 上传文件夹 - 支持缓存目录
+func uploadFolderWithCacheDir(config *Config, folderPath string, excludePatterns []string, keepStructure bool, maxConcurrent int, cacheDir string) error {
 	// 收集所有需要上传的文件
 	fmt.Println("正在扫描文件...")
 	files, err := collectFiles(folderPath, excludePatterns, keepStructure)
@@ -808,7 +853,7 @@ func uploadFolder(config *Config, folderPath string, excludePatterns []string, k
 	for _, file := range files {
 		semaphore <- struct{}{} // 获取信号量
 		wg.Add(1)
-		go uploadSingleFile(config, file, stats, &wg, semaphore)
+		go uploadSingleFileWithCacheDir(config, file, stats, &wg, semaphore, cacheDir)
 	}
 	
 	// 等待所有上传完成
