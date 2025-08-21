@@ -13,8 +13,8 @@ import (
 // Precreate
 //
 // RETURNS:
-//     - PrecreateReturn: precreate return
-//     - error: the return error if any occurs
+//   - PrecreateReturn: precreate return
+//   - error: the return error if any occurs
 func Precreate(accessToken string, arg *PrecreateArg) (PrecreateReturn, error) {
 	ret := PrecreateReturn{}
 

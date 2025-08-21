@@ -13,8 +13,8 @@ import (
 // create
 //
 // RETURNS:
-//     - CreateReturn: create return
-//     - error: the return error if any occurs
+//   - CreateReturn: create return
+//   - error: the return error if any occurs
 func Create(accessToken string, arg *CreateArg) (CreateReturn, error) {
 	ret := CreateReturn{}
 

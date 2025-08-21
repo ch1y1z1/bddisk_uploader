@@ -15,11 +15,11 @@ import (
 
 // OAuth相关常量
 const (
-	AuthURL  = "https://openapi.baidu.com/oauth/2.0/authorize"
-	TokenURL = "https://openapi.baidu.com/oauth/2.0/token"
+	AuthURL            = "https://openapi.baidu.com/oauth/2.0/authorize"
+	TokenURL           = "https://openapi.baidu.com/oauth/2.0/token"
 	DefaultRedirectURI = "http://localhost:8080/callback"
-	DefaultScope = "basic,netdisk"
-	CallbackPath = "/callback"
+	DefaultScope       = "basic,netdisk"
+	CallbackPath       = "/callback"
 )
 
 // 授权响应结构体
@@ -49,7 +49,7 @@ func generateAuthURL(config *OAuthConfig) string {
 	params.Set("client_id", config.ClientID)
 	params.Set("redirect_uri", config.RedirectURI)
 	params.Set("scope", config.Scope)
-	
+
 	return AuthURL + "?" + params.Encode()
 }
 

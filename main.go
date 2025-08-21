@@ -20,18 +20,18 @@ import (
 )
 
 const (
-	ChunkSize = 4 * 1024 * 1024 // 4MB分片大小
-	ConfigFile = "config.json"
-	MaxRetries = 3              // 最大重试次数
-	BaseRetryDelay = 1 * time.Second // 基础重试延迟
-	DefaultCacheDir = ".chunks"        // 默认缓存目录
+	ChunkSize       = 4 * 1024 * 1024 // 4MB分片大小
+	ConfigFile      = "config.json"
+	MaxRetries      = 3               // 最大重试次数
+	BaseRetryDelay  = 1 * time.Second // 基础重试延迟
+	DefaultCacheDir = ".chunks"       // 默认缓存目录
 )
 
 type Config struct {
-	AccessToken  string      `json:"access_token"`
-	RefreshToken string      `json:"refresh_token,omitempty"`
-	ExpiresAt    *time.Time  `json:"expires_at,omitempty"`
-	AppPath      string      `json:"app_path"` // 应用路径前缀，如 "/apps/your_app_name/"
+	AccessToken  string       `json:"access_token"`
+	RefreshToken string       `json:"refresh_token,omitempty"`
+	ExpiresAt    *time.Time   `json:"expires_at,omitempty"`
+	AppPath      string       `json:"app_path"` // 应用路径前缀，如 "/apps/your_app_name/"
 	OAuth        *OAuthConfig `json:"oauth,omitempty"`
 }
 
@@ -115,7 +115,7 @@ func calculateFileMD5Chunks(filePath string) ([]string, uint64, error) {
 // 获取缓存目录，如果不存在则创建
 func getCacheDir(customCacheDir string) (string, error) {
 	var cacheDir string
-	
+
 	if customCacheDir != "" {
 		// 使用用户指定的缓存目录
 		cacheDir = customCacheDir
@@ -127,12 +127,12 @@ func getCacheDir(customCacheDir string) (string, error) {
 		}
 		cacheDir = filepath.Join(currentDir, DefaultCacheDir)
 	}
-	
+
 	// 确保缓存目录存在
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return "", fmt.Errorf("创建缓存目录失败: %v", err)
 	}
-	
+
 	return cacheDir, nil
 }
 
@@ -185,7 +185,7 @@ func cleanupChunks(chunkFiles []string) {
 	if len(chunkFiles) == 0 {
 		return
 	}
-	
+
 	logger.Info("正在清理 %d 个分片文件...", len(chunkFiles))
 	cleanedCount := 0
 	for _, chunkFile := range chunkFiles {
@@ -204,12 +204,12 @@ func isRetryableError(err error) bool {
 		return false
 	}
 	errStr := strings.ToLower(err.Error())
-	
+
 	// 可重试的错误类型
 	retryableErrors := []string{
 		"timeout",
 		"connection reset",
-		"connection refused", 
+		"connection refused",
 		"network unreachable",
 		"temporary failure",
 		"502 bad gateway",
@@ -220,7 +220,7 @@ func isRetryableError(err error) bool {
 		"eof",
 		"broken pipe",
 	}
-	
+
 	for _, retryable := range retryableErrors {
 		if strings.Contains(errStr, retryable) {
 			return true
@@ -232,7 +232,7 @@ func isRetryableError(err error) bool {
 // 带重试的分片上传函数
 func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partSeq int) (upload.UploadReturn, error) {
 	var lastErr error
-	
+
 	for attempt := 0; attempt <= MaxRetries; attempt++ {
 		if attempt > 0 {
 			// 计算退避延迟：指数退避 + 随机抖动
@@ -240,12 +240,12 @@ func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partS
 			if delay > 30*time.Second {
 				delay = 30 * time.Second // 最大延迟30秒
 			}
-			
+
 			logger.Warn("分片 %d 第 %d 次重试，等待 %v...", partSeq+1, attempt, delay)
 			time.Sleep(delay)
 			logger.Debug("分片 %d 开始重试", partSeq+1)
 		}
-		
+
 		result, err := upload.Upload(accessToken, uploadArg)
 		if err == nil {
 			if attempt > 0 {
@@ -253,18 +253,18 @@ func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partS
 			}
 			return result, nil
 		}
-		
+
 		lastErr = err
-		
+
 		// 如果是不可重试的错误，直接返回
 		if !isRetryableError(err) {
 			logger.Error("分片 %d 出现不可重试错误: %v", partSeq+1, err)
 			return upload.UploadReturn{}, err
 		}
-		
+
 		logger.Warn("分片 %d 上传失败 (尝试 %d/%d): %v", partSeq+1, attempt+1, MaxRetries+1, err)
 	}
-	
+
 	return upload.UploadReturn{}, fmt.Errorf("分片 %d 上传失败，已尝试 %d 次: %v", partSeq, MaxRetries+1, lastErr)
 }
 
@@ -513,7 +513,7 @@ func main() {
 	// 检查文件或文件夹是否存在
 	var targetPath string
 	var isFolder bool
-	
+
 	if localFolderPath != "" {
 		targetPath = localFolderPath
 		isFolder = true
@@ -642,7 +642,7 @@ func saveTokenToConfig(tokenResp *TokenResponse) error {
 	if tokenResp.RefreshToken != "" {
 		config.RefreshToken = tokenResp.RefreshToken
 	}
-	
+
 	// 计算过期时间
 	if tokenResp.ExpiresIn > 0 {
 		expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
@@ -681,7 +681,7 @@ func parseExcludePatterns(patterns string) []string {
 	if patterns == "" {
 		return []string{}
 	}
-	
+
 	parts := strings.Split(patterns, ",")
 	var result []string
 	for _, part := range parts {
@@ -696,7 +696,7 @@ func parseExcludePatterns(patterns string) []string {
 // 检查文件是否应该被排除
 func shouldExcludeFile(filePath string, excludePatterns []string) bool {
 	fileName := filepath.Base(filePath)
-	
+
 	// 默认排除的文件
 	defaultExcludes := []string{
 		".DS_Store",
@@ -709,9 +709,9 @@ func shouldExcludeFile(filePath string, excludePatterns []string) bool {
 		"*.temp",
 		"*~",
 	}
-	
+
 	allPatterns := append(excludePatterns, defaultExcludes...)
-	
+
 	for _, pattern := range allPatterns {
 		if matched, _ := filepath.Match(pattern, fileName); matched {
 			return true
@@ -727,27 +727,27 @@ func shouldExcludeFile(filePath string, excludePatterns []string) bool {
 // 收集文件夹中的所有文件
 func collectFiles(folderPath string, excludePatterns []string, keepStructure bool) ([]FileInfo, error) {
 	var files []FileInfo
-	
+
 	// 获取文件夹名称，用于保持完整的目录结构
 	folderName := filepath.Base(folderPath)
-	
+
 	err := filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			logger.Warn("警告: 访问文件失败 %s: %v", path, err)
 			return nil // 继续处理其他文件
 		}
-		
+
 		// 跳过目录
 		if info.IsDir() {
 			return nil
 		}
-		
+
 		// 检查是否应该排除
 		if shouldExcludeFile(path, excludePatterns) {
 			logger.Debug("跳过文件: %s", path)
 			return nil
 		}
-		
+
 		// 计算远程路径
 		var remotePath string
 		if keepStructure {
@@ -764,17 +764,17 @@ func collectFiles(folderPath string, excludePatterns []string, keepStructure boo
 			remotePath = filepath.Join(folderName, info.Name())
 			remotePath = strings.ReplaceAll(remotePath, "\\", "/")
 		}
-		
+
 		files = append(files, FileInfo{
 			LocalPath:  path,
 			RemotePath: remotePath,
 			Size:       info.Size(),
 			ModTime:    info.ModTime(),
 		})
-		
+
 		return nil
 	})
-	
+
 	return files, err
 }
 
@@ -782,12 +782,12 @@ func collectFiles(folderPath string, excludePatterns []string, keepStructure boo
 func uploadSingleFileWithCacheDir(config *Config, fileInfo FileInfo, stats *UploadStats, wg *sync.WaitGroup, semaphore chan struct{}, cacheDir string) {
 	defer wg.Done()
 	defer func() { <-semaphore }() // 释放信号量
-	
-	fmt.Printf("[%d/%d] 上传: %s\n", 
-		atomic.LoadInt64(&stats.UploadedFiles)+atomic.LoadInt64(&stats.FailedFiles)+1, 
-		stats.TotalFiles, 
+
+	fmt.Printf("[%d/%d] 上传: %s\n",
+		atomic.LoadInt64(&stats.UploadedFiles)+atomic.LoadInt64(&stats.FailedFiles)+1,
+		stats.TotalFiles,
 		fileInfo.RemotePath)
-	
+
 	err := uploadFileWithCacheDir(config, fileInfo.LocalPath, fileInfo.RemotePath, cacheDir)
 	if err != nil {
 		atomic.AddInt64(&stats.FailedFiles, 1)
@@ -832,48 +832,48 @@ func uploadFolderWithCacheDir(config *Config, folderPath string, excludePatterns
 	if err != nil {
 		return fmt.Errorf("收集文件失败: %v", err)
 	}
-	
+
 	if len(files) == 0 {
 		fmt.Println("没有找到需要上传的文件")
 		return nil
 	}
-	
+
 	// 计算总大小
 	var totalSize int64
 	for _, file := range files {
 		totalSize += file.Size
 	}
-	
+
 	// 初始化统计信息
 	stats := &UploadStats{
 		TotalFiles: int64(len(files)),
 		TotalSize:  totalSize,
 		StartTime:  time.Now(),
 	}
-	
+
 	fmt.Printf("发现 %d 个文件，总大小: %s\n", len(files), formatFileSize(totalSize))
 	fmt.Printf("开始并发上传 (最大并发数: %d)...\n\n", maxConcurrent)
-	
+
 	// 创建信号量控制并发数
 	semaphore := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
-	
+
 	// 启动进度监控
 	done := make(chan bool)
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-ticker.C:
 				uploaded := atomic.LoadInt64(&stats.UploadedFiles)
 				failed := atomic.LoadInt64(&stats.FailedFiles)
 				uploadedSize := atomic.LoadInt64(&stats.UploadedSize)
-				
+
 				progress := float64(uploaded+failed) / float64(stats.TotalFiles) * 100
 				elapsed := time.Since(stats.StartTime)
-				
+
 				fmt.Printf("\n📊 进度报告: %.1f%% (%d/%d) | 成功: %d | 失败: %d | 已传输: %s/%s | 耗时: %s\n\n",
 					progress, uploaded+failed, stats.TotalFiles, uploaded, failed,
 					formatFileSize(uploadedSize), formatFileSize(totalSize), formatDuration(elapsed))
@@ -882,39 +882,39 @@ func uploadFolderWithCacheDir(config *Config, folderPath string, excludePatterns
 			}
 		}
 	}()
-	
+
 	// 并发上传文件
 	for _, file := range files {
 		semaphore <- struct{}{} // 获取信号量
 		wg.Add(1)
 		go uploadSingleFileWithCacheDir(config, file, stats, &wg, semaphore, cacheDir)
 	}
-	
+
 	// 等待所有上传完成
 	wg.Wait()
 	done <- true
-	
+
 	// 显示最终统计
 	elapsed := time.Since(stats.StartTime)
 	uploaded := atomic.LoadInt64(&stats.UploadedFiles)
 	failed := atomic.LoadInt64(&stats.FailedFiles)
 	uploadedSize := atomic.LoadInt64(&stats.UploadedSize)
-	
+
 	fmt.Printf("\n🎉 上传完成!\n")
 	fmt.Printf("总文件数: %d\n", stats.TotalFiles)
 	fmt.Printf("成功上传: %d\n", uploaded)
 	fmt.Printf("失败文件: %d\n", failed)
 	fmt.Printf("传输大小: %s / %s\n", formatFileSize(uploadedSize), formatFileSize(totalSize))
 	fmt.Printf("总耗时: %s\n", formatDuration(elapsed))
-	
+
 	if uploaded > 0 {
 		avgSpeed := float64(uploadedSize) / elapsed.Seconds()
 		fmt.Printf("平均速度: %s/s\n", formatFileSize(int64(avgSpeed)))
 	}
-	
+
 	if failed > 0 {
 		return fmt.Errorf("有 %d 个文件上传失败", failed)
 	}
-	
+
 	return nil
 }
