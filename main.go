@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"bddisk_uploader/logger"
 	"icode.baidu.com/baidu/xpan/go-sdk/xpan/upload"
 )
 
@@ -185,17 +186,16 @@ func cleanupChunks(chunkFiles []string) {
 		return
 	}
 	
-	fmt.Printf("正在清理 %d 个分片文件...", len(chunkFiles))
+	logger.Info("正在清理 %d 个分片文件...", len(chunkFiles))
 	cleanedCount := 0
 	for _, chunkFile := range chunkFiles {
 		if err := os.Remove(chunkFile); err != nil {
-			// 只在调试模式下显示清理失败的详细信息
-			// 不影响主要流程，因为这些是临时文件
+			logger.Debug("清理分片文件失败: %s - %v", chunkFile, err)
 			continue
 		}
 		cleanedCount++
 	}
-	fmt.Printf("完成，已清理 %d 个分片文件\n", cleanedCount)
+	logger.Info("完成，已清理 %d 个分片文件", cleanedCount)
 }
 
 // 判断是否为可重试的错误
@@ -241,15 +241,15 @@ func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partS
 				delay = 30 * time.Second // 最大延迟30秒
 			}
 			
-			fmt.Printf("分片 %d 第 %d 次重试，等待 %v...", partSeq+1, attempt, delay)
+			logger.Warn("分片 %d 第 %d 次重试，等待 %v...", partSeq+1, attempt, delay)
 			time.Sleep(delay)
-			fmt.Printf("开始重试\n")
+			logger.Debug("分片 %d 开始重试", partSeq+1)
 		}
 		
 		result, err := upload.Upload(accessToken, uploadArg)
 		if err == nil {
 			if attempt > 0 {
-				fmt.Printf("分片 %d 重试成功！\n", partSeq+1)
+				logger.Info("分片 %d 重试成功！", partSeq+1)
 			}
 			return result, nil
 		}
@@ -258,11 +258,11 @@ func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partS
 		
 		// 如果是不可重试的错误，直接返回
 		if !isRetryableError(err) {
-			fmt.Printf("分片 %d 出现不可重试错误: %v\n", partSeq+1, err)
+			logger.Error("分片 %d 出现不可重试错误: %v", partSeq+1, err)
 			return upload.UploadReturn{}, err
 		}
 		
-		fmt.Printf("分片 %d 上传失败 (尝试 %d/%d): %v\n", partSeq+1, attempt+1, MaxRetries+1, err)
+		logger.Warn("分片 %d 上传失败 (尝试 %d/%d): %v", partSeq+1, attempt+1, MaxRetries+1, err)
 	}
 	
 	return upload.UploadReturn{}, fmt.Errorf("分片 %d 上传失败，已尝试 %d 次: %v", partSeq, MaxRetries+1, lastErr)
@@ -271,39 +271,39 @@ func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partS
 // 上传文件到百度网盘
 func uploadFileWithCacheDir(config *Config, localFilePath, remoteFileName, cacheDir string) error {
 	// 计算文件MD5分片
-	fmt.Printf("正在计算文件MD5分片...")
+	logger.Progress("正在计算文件MD5分片...")
 	md5List, fileSize, err := calculateFileMD5Chunks(localFilePath)
 	if err != nil {
 		return fmt.Errorf("计算文件MD5失败: %v", err)
 	}
-	fmt.Printf("完成，文件大小: %d 字节，分片数: %d\n", fileSize, len(md5List))
+	logger.Info("完成，文件大小: %d 字节，分片数: %d", fileSize, len(md5List))
 
 	// 构建远程路径
 	remotePath := filepath.Join(config.AppPath, remoteFileName)
 	remotePath = strings.ReplaceAll(remotePath, "\\", "/") // 确保使用Unix风格路径
 
 	// 1. Precreate - 预创建文件
-	fmt.Printf("正在预创建文件...")
+	logger.Progress("正在预创建文件...")
 	precreateArg := upload.NewPrecreateArg(remotePath, fileSize, md5List)
 	precreateResult, err := upload.Precreate(config.AccessToken, precreateArg)
 	if err != nil {
 		return fmt.Errorf("预创建文件失败: %v", err)
 	}
-	fmt.Printf("完成，上传ID: %s\n", precreateResult.UploadId)
+	logger.Debug("完成，上传ID: %s", precreateResult.UploadId)
 
 	if precreateResult.ReturnType == 2 {
-		fmt.Println("文件已存在，无需重复上传")
+		logger.Info("文件已存在，无需重复上传")
 		return nil
 	}
 
 	// 创建临时分片文件
-	fmt.Printf("正在创建文件分片...")
+	logger.Progress("正在创建文件分片...")
 	chunkFiles, err := createFileChunks(localFilePath, cacheDir)
 	if err != nil {
 		return fmt.Errorf("创建文件分片失败: %v", err)
 	}
 	defer cleanupChunks(chunkFiles)
-	fmt.Printf("完成，共创建 %d 个分片\n", len(chunkFiles))
+	logger.Debug("完成，共创建 %d 个分片", len(chunkFiles))
 
 	// 2. Upload - 上传需要的分片（带重试）
 	for _, partSeq := range precreateResult.BlockList {
@@ -311,7 +311,7 @@ func uploadFileWithCacheDir(config *Config, localFilePath, remoteFileName, cache
 			return fmt.Errorf("分片序号 %d 超出范围", partSeq)
 		}
 
-		fmt.Printf("正在上传分片 %d/%d...", partSeq+1, len(md5List))
+		logger.Progress("正在上传分片 %d/%d...", partSeq+1, len(md5List))
 		uploadArg := upload.NewUploadArg(
 			precreateResult.UploadId,
 			remotePath,
@@ -323,11 +323,11 @@ func uploadFileWithCacheDir(config *Config, localFilePath, remoteFileName, cache
 		if err != nil {
 			return fmt.Errorf("上传分片 %d 失败: %v", partSeq, err)
 		}
-		fmt.Printf("完成，MD5: %s\n", uploadResult.Md5)
+		logger.Debug("分片 %d 上传完成，MD5: %s", partSeq+1, uploadResult.Md5)
 	}
 
 	// 3. Create - 创建文件
-	fmt.Printf("正在合并文件...")
+	logger.Progress("正在合并文件...")
 	createArg := upload.NewCreateArg(precreateResult.UploadId, remotePath, fileSize, md5List)
 	createResult, err := upload.Create(config.AccessToken, createArg)
 	if err != nil {
@@ -338,13 +338,14 @@ func uploadFileWithCacheDir(config *Config, localFilePath, remoteFileName, cache
 		return fmt.Errorf("创建文件失败，错误码: %d", createResult.Errno)
 	}
 
-	fmt.Printf("完成！文件已成功上传到: %s\n", createResult.Path)
+	logger.Info("完成！文件已成功上传到: %s", createResult.Path)
 	return nil
 }
 
 func main() {
 	var localFilePath, localFolderPath, remoteFileName, authCode, refreshToken, excludePatterns, cacheDir string
-	var initConfig, auth, refresh, keepStructure bool
+	var logFile, logLevel string
+	var initConfig, auth, refresh, keepStructure, quietMode bool
 	var authPort, maxConcurrent int
 
 	flag.StringVar(&localFilePath, "file", "", "要上传的本地文件路径")
@@ -352,28 +353,56 @@ func main() {
 	flag.StringVar(&remoteFileName, "name", "", "上传到网盘的文件名（可选，默认使用本地文件名）")
 	flag.StringVar(&excludePatterns, "exclude", "", "要排除的文件模式，用逗号分隔（如：*.tmp,*.log,.DS_Store）")
 	flag.StringVar(&cacheDir, "cache-dir", "", "指定分片缓存目录（可选，默认使用当前目录下的.chunks）")
+	flag.StringVar(&logFile, "log-file", "", "日志文件路径（可选，默认只输出到控制台）")
+	flag.StringVar(&logLevel, "log-level", "info", "日志级别 (debug,info,warn,error,fatal)")
 	flag.StringVar(&authCode, "code", "", "授权码（用于获取access_token）")
 	flag.StringVar(&refreshToken, "refresh", "", "刷新token")
 	flag.BoolVar(&initConfig, "init", false, "初始化配置文件")
 	flag.BoolVar(&auth, "auth", false, "启动授权流程")
 	flag.BoolVar(&refresh, "refresh-token", false, "使用refresh_token刷新access_token")
 	flag.BoolVar(&keepStructure, "keep-structure", true, "保持文件夹结构（默认启用）")
+	flag.BoolVar(&quietMode, "quiet", false, "静默模式（减少输出信息）")
 	flag.IntVar(&authPort, "port", 8080, "授权回调服务器端口")
 	flag.IntVar(&maxConcurrent, "concurrent", 3, "最大并发上传数（默认3）")
 	flag.Parse()
 
+	// 解析日志级别
+	var level logger.LogLevel
+	switch strings.ToLower(logLevel) {
+	case "debug":
+		level = logger.DEBUG
+	case "info":
+		level = logger.INFO
+	case "warn", "warning":
+		level = logger.WARN
+	case "error":
+		level = logger.ERROR
+	case "fatal":
+		level = logger.FATAL
+	default:
+		fmt.Printf("无效的日志级别: %s，使用默认级别 info\n", logLevel)
+		level = logger.INFO
+	}
+
+	// 初始化日志系统
+	showProgress := !quietMode
+	if err := logger.Init(level, logFile, showProgress); err != nil {
+		fmt.Printf("初始化日志系统失败: %v\n", err)
+		os.Exit(1)
+	}
+
 	// 初始化配置文件
 	if initConfig {
 		if err := createDefaultConfig(); err != nil {
-			fmt.Printf("创建配置文件失败: %v\n", err)
+			logger.Error("创建配置文件失败: %v", err)
 			os.Exit(1)
 		}
-		fmt.Printf("已创建配置文件 %s\n", ConfigFile)
-		fmt.Println("请编辑配置文件中的以下信息:")
-		fmt.Println("  - client_id: 您的App Key")
-		fmt.Println("  - client_secret: 您的Secret Key")
-		fmt.Println("  - app_path: 文件上传路径前缀")
-		fmt.Println("然后运行: ./bddisk_uploader -auth 进行授权")
+		logger.Info("已创建配置文件 %s", ConfigFile)
+		logger.Info("请编辑配置文件中的以下信息:")
+		logger.Info("  - client_id: 您的App Key")
+		logger.Info("  - client_secret: 您的Secret Key")
+		logger.Info("  - app_path: 文件上传路径前缀")
+		logger.Info("然后运行: ./bddisk_uploader -auth 进行授权")
 		return
 	}
 
@@ -381,23 +410,23 @@ func main() {
 	if auth {
 		config, err := loadConfigForAuth()
 		if err != nil {
-			fmt.Printf("加载配置失败: %v\n", err)
+			logger.Error("加载配置失败: %v", err)
 			os.Exit(1)
 		}
 
 		tokenResp, err := startAuthServer(config.OAuth, authPort)
 		if err != nil {
-			fmt.Printf("授权失败: %v\n", err)
+			logger.Error("授权失败: %v", err)
 			os.Exit(1)
 		}
 
 		// 保存token到配置文件
 		if err := saveTokenToConfig(tokenResp); err != nil {
-			fmt.Printf("保存token失败: %v\n", err)
+			logger.Error("保存token失败: %v", err)
 			os.Exit(1)
 		}
 
-		fmt.Println("授权成功！access_token已保存到配置文件")
+		logger.Info("授权成功！access_token已保存到配置文件")
 		return
 	}
 
@@ -405,22 +434,22 @@ func main() {
 	if authCode != "" {
 		config, err := loadConfigForAuth()
 		if err != nil {
-			fmt.Printf("加载配置失败: %v\n", err)
+			logger.Error("加载配置失败: %v", err)
 			os.Exit(1)
 		}
 
 		tokenResp, err := getAccessToken(config.OAuth, authCode)
 		if err != nil {
-			fmt.Printf("获取token失败: %v\n", err)
+			logger.Error("获取token失败: %v", err)
 			os.Exit(1)
 		}
 
 		if err := saveTokenToConfig(tokenResp); err != nil {
-			fmt.Printf("保存token失败: %v\n", err)
+			logger.Error("保存token失败: %v", err)
 			os.Exit(1)
 		}
 
-		fmt.Println("access_token获取成功并已保存！")
+		logger.Info("access_token获取成功并已保存！")
 		return
 	}
 
@@ -428,27 +457,27 @@ func main() {
 	if refresh {
 		config, err := loadConfigForAuth()
 		if err != nil {
-			fmt.Printf("加载配置失败: %v\n", err)
+			logger.Error("加载配置失败: %v", err)
 			os.Exit(1)
 		}
 
 		if config.RefreshToken == "" {
-			fmt.Println("配置文件中没有refresh_token，请重新授权")
+			logger.Error("配置文件中没有refresh_token，请重新授权")
 			os.Exit(1)
 		}
 
 		tokenResp, err := refreshAccessToken(config.OAuth, config.RefreshToken)
 		if err != nil {
-			fmt.Printf("刷新token失败: %v\n", err)
+			logger.Error("刷新token失败: %v", err)
 			os.Exit(1)
 		}
 
 		if err := saveTokenToConfig(tokenResp); err != nil {
-			fmt.Printf("保存token失败: %v\n", err)
+			logger.Error("保存token失败: %v", err)
 			os.Exit(1)
 		}
 
-		fmt.Println("access_token刷新成功！")
+		logger.Info("access_token刷新成功！")
 		return
 	}
 
@@ -467,12 +496,17 @@ func main() {
 		fmt.Println("  -keep-structure       保持文件夹结构（默认启用）")
 		fmt.Println("  -concurrent <数量>     最大并发上传数（默认3）")
 		fmt.Println("  -cache-dir <路径>      指定分片缓存目录（默认使用当前目录下的.chunks）")
+		fmt.Println("")
+		fmt.Println("日志选项:")
+		fmt.Println("  -log-file <路径>       日志文件路径（可选，默认只输出到控制台）")
+		fmt.Println("  -log-level <级别>      日志级别（debug,info,warn,error,fatal，默认info）")
+		fmt.Println("  -quiet                静默模式（减少输出信息）")
 		os.Exit(1)
 	}
 
 	// 检查互斥参数
 	if localFilePath != "" && localFolderPath != "" {
-		fmt.Println("错误: -file 和 -folder 参数不能同时使用")
+		logger.Error("错误: -file 和 -folder 参数不能同时使用")
 		os.Exit(1)
 	}
 
@@ -484,19 +518,19 @@ func main() {
 		targetPath = localFolderPath
 		isFolder = true
 		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-			fmt.Printf("文件夹不存在: %s\n", targetPath)
+			logger.Error("文件夹不存在: %s", targetPath)
 			os.Exit(1)
 		}
 		// 检查是否为目录
 		if fileInfo, err := os.Stat(targetPath); err == nil && !fileInfo.IsDir() {
-			fmt.Printf("错误: %s 不是一个文件夹\n", targetPath)
+			logger.Error("错误: %s 不是一个文件夹", targetPath)
 			os.Exit(1)
 		}
 	} else {
 		targetPath = localFilePath
 		isFolder = false
 		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-			fmt.Printf("文件不存在: %s\n", targetPath)
+			logger.Error("文件不存在: %s", targetPath)
 			os.Exit(1)
 		}
 		// 如果没有指定远程文件名，使用本地文件名
@@ -508,29 +542,29 @@ func main() {
 	// 加载配置
 	config, err := loadConfig()
 	if err != nil {
-		fmt.Printf("配置错误: %v\n", err)
-		fmt.Printf("请先运行: ./bddisk_uploader -init 来创建配置文件\n")
+		logger.Error("配置错误: %v", err)
+		logger.Error("请先运行: ./bddisk_uploader -init 来创建配置文件")
 		os.Exit(1)
 	}
 
 	// 检查token是否过期
 	if config.ExpiresAt != nil && time.Now().After(*config.ExpiresAt) {
-		fmt.Println("access_token已过期，尝试自动刷新...")
+		logger.Warn("access_token已过期，尝试自动刷新...")
 		if config.RefreshToken != "" && config.OAuth != nil {
 			tokenResp, err := refreshAccessToken(config.OAuth, config.RefreshToken)
 			if err != nil {
-				fmt.Printf("自动刷新token失败: %v\n", err)
-				fmt.Println("请重新授权: ./bddisk_uploader -auth")
+				logger.Error("自动刷新token失败: %v", err)
+				logger.Error("请重新授权: ./bddisk_uploader -auth")
 				os.Exit(1)
 			}
 			if err := saveTokenToConfig(tokenResp); err != nil {
-				fmt.Printf("保存新token失败: %v\n", err)
+				logger.Error("保存新token失败: %v", err)
 				os.Exit(1)
 			}
 			config.AccessToken = tokenResp.AccessToken
-			fmt.Println("access_token已自动刷新")
+			logger.Info("access_token已自动刷新")
 		} else {
-			fmt.Println("无法自动刷新token，请重新授权: ./bddisk_uploader -auth")
+			logger.Error("无法自动刷新token，请重新授权: ./bddisk_uploader -auth")
 			os.Exit(1)
 		}
 	}
@@ -538,29 +572,29 @@ func main() {
 	// 获取缓存目录
 	actualCacheDir, err := getCacheDir(cacheDir)
 	if err != nil {
-		fmt.Printf("获取缓存目录失败: %v\n", err)
+		logger.Error("获取缓存目录失败: %v", err)
 		os.Exit(1)
 	}
-	fmt.Printf("使用缓存目录: %s\n", actualCacheDir)
+	logger.Info("使用缓存目录: %s", actualCacheDir)
 
 	// 上传文件或文件夹
 	if isFolder {
 		// 上传文件夹
 		excludeList := parseExcludePatterns(excludePatterns)
-		fmt.Printf("开始上传文件夹: %s\n", targetPath)
+		logger.Info("开始上传文件夹: %s", targetPath)
 		if err := uploadFolderWithCacheDir(config, targetPath, excludeList, keepStructure, maxConcurrent, actualCacheDir); err != nil {
-			fmt.Printf("上传失败: %v\n", err)
+			logger.Error("上传失败: %v", err)
 			os.Exit(1)
 		}
-		fmt.Println("文件夹上传完成！")
+		logger.Info("文件夹上传完成！")
 	} else {
 		// 上传单个文件
-		fmt.Printf("开始上传文件: %s -> %s\n", targetPath, remoteFileName)
+		logger.Info("开始上传文件: %s -> %s", targetPath, remoteFileName)
 		if err := uploadFileWithCacheDir(config, targetPath, remoteFileName, actualCacheDir); err != nil {
-			fmt.Printf("上传失败: %v\n", err)
+			logger.Error("上传失败: %v", err)
 			os.Exit(1)
 		}
-		fmt.Println("上传成功！")
+		logger.Info("上传成功！")
 	}
 }
 
@@ -699,7 +733,7 @@ func collectFiles(folderPath string, excludePatterns []string, keepStructure boo
 	
 	err := filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			fmt.Printf("警告: 访问文件失败 %s: %v\n", path, err)
+			logger.Warn("警告: 访问文件失败 %s: %v", path, err)
 			return nil // 继续处理其他文件
 		}
 		
@@ -710,7 +744,7 @@ func collectFiles(folderPath string, excludePatterns []string, keepStructure boo
 		
 		// 检查是否应该排除
 		if shouldExcludeFile(path, excludePatterns) {
-			fmt.Printf("跳过文件: %s\n", path)
+			logger.Debug("跳过文件: %s", path)
 			return nil
 		}
 		
@@ -793,7 +827,7 @@ func formatDuration(d time.Duration) string {
 // 上传文件夹 - 支持缓存目录
 func uploadFolderWithCacheDir(config *Config, folderPath string, excludePatterns []string, keepStructure bool, maxConcurrent int, cacheDir string) error {
 	// 收集所有需要上传的文件
-	fmt.Println("正在扫描文件...")
+	logger.Info("正在扫描文件...")
 	files, err := collectFiles(folderPath, excludePatterns, keepStructure)
 	if err != nil {
 		return fmt.Errorf("收集文件失败: %v", err)

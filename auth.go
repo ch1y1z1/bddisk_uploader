@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"bddisk_uploader/logger"
 )
 
 // OAuth相关常量
@@ -117,8 +119,8 @@ func refreshAccessToken(config *OAuthConfig, refreshToken string) (*TokenRespons
 // 启动HTTP服务器接收授权回调
 func startAuthServer(config *OAuthConfig, port int) (*TokenResponse, error) {
 	authURL := generateAuthURL(config)
-	fmt.Printf("请在浏览器中打开以下URL进行授权:\n%s\n\n", authURL)
-	fmt.Printf("等待授权回调...\n")
+	logger.Info("请在浏览器中打开以下URL进行授权:\n%s", authURL)
+	logger.Info("等待授权回调...")
 
 	tokenChan := make(chan *TokenResponse, 1)
 	errChan := make(chan error, 1)
@@ -144,8 +146,8 @@ func startAuthServer(config *OAuthConfig, port int) (*TokenResponse, error) {
 			return
 		}
 
-		fmt.Printf("收到授权码: %s\n", code)
-		fmt.Printf("正在获取access_token...\n")
+		logger.Debug("收到授权码: %s", code)
+		logger.Info("正在获取access_token...")
 
 		tokenResp, err := getAccessToken(config, code)
 		if err != nil {
