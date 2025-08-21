@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,8 @@ import (
 const (
 	ChunkSize = 4 * 1024 * 1024 // 4MB分片大小
 	ConfigFile = "config.json"
+	MaxRetries = 3              // 最大重试次数
+	BaseRetryDelay = 1 * time.Second // 基础重试延迟
 )
 
 type Config struct {
@@ -160,6 +163,76 @@ func cleanupChunks(chunkFiles []string) {
 	}
 }
 
+// 判断是否为可重试的错误
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	
+	// 可重试的错误类型
+	retryableErrors := []string{
+		"timeout",
+		"connection reset",
+		"connection refused", 
+		"network unreachable",
+		"temporary failure",
+		"502 bad gateway",
+		"503 service unavailable",
+		"504 gateway timeout",
+		"500 internal server error",
+		"i/o timeout",
+		"eof",
+		"broken pipe",
+	}
+	
+	for _, retryable := range retryableErrors {
+		if strings.Contains(errStr, retryable) {
+			return true
+		}
+	}
+	return false
+}
+
+// 带重试的分片上传函数
+func uploadChunkWithRetry(accessToken string, uploadArg *upload.UploadArg, partSeq int) (upload.UploadReturn, error) {
+	var lastErr error
+	
+	for attempt := 0; attempt <= MaxRetries; attempt++ {
+		if attempt > 0 {
+			// 计算退避延迟：指数退避 + 随机抖动
+			delay := time.Duration(math.Pow(2, float64(attempt-1))) * BaseRetryDelay
+			if delay > 30*time.Second {
+				delay = 30 * time.Second // 最大延迟30秒
+			}
+			
+			fmt.Printf("分片 %d 第 %d 次重试，等待 %v...", partSeq+1, attempt, delay)
+			time.Sleep(delay)
+			fmt.Printf("开始重试\n")
+		}
+		
+		result, err := upload.Upload(accessToken, uploadArg)
+		if err == nil {
+			if attempt > 0 {
+				fmt.Printf("分片 %d 重试成功！\n", partSeq+1)
+			}
+			return result, nil
+		}
+		
+		lastErr = err
+		
+		// 如果是不可重试的错误，直接返回
+		if !isRetryableError(err) {
+			fmt.Printf("分片 %d 出现不可重试错误: %v\n", partSeq+1, err)
+			return upload.UploadReturn{}, err
+		}
+		
+		fmt.Printf("分片 %d 上传失败 (尝试 %d/%d): %v\n", partSeq+1, attempt+1, MaxRetries+1, err)
+	}
+	
+	return upload.UploadReturn{}, fmt.Errorf("分片 %d 上传失败，已尝试 %d 次: %v", partSeq, MaxRetries+1, lastErr)
+}
+
 // 上传文件到百度网盘
 func uploadFile(config *Config, localFilePath, remoteFileName string) error {
 	// 计算文件MD5分片
@@ -197,7 +270,7 @@ func uploadFile(config *Config, localFilePath, remoteFileName string) error {
 	defer cleanupChunks(chunkFiles)
 	fmt.Printf("完成，共创建 %d 个分片\n", len(chunkFiles))
 
-	// 2. Upload - 上传需要的分片
+	// 2. Upload - 上传需要的分片（带重试）
 	for _, partSeq := range precreateResult.BlockList {
 		if partSeq >= len(chunkFiles) {
 			return fmt.Errorf("分片序号 %d 超出范围", partSeq)
@@ -211,7 +284,7 @@ func uploadFile(config *Config, localFilePath, remoteFileName string) error {
 			partSeq,
 		)
 
-		uploadResult, err := upload.Upload(config.AccessToken, uploadArg)
+		uploadResult, err := uploadChunkWithRetry(config.AccessToken, uploadArg, partSeq)
 		if err != nil {
 			return fmt.Errorf("上传分片 %d 失败: %v", partSeq, err)
 		}
